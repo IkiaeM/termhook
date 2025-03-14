@@ -1,0 +1,209 @@
+#!/bin/bash
+PRGNAME=$(basename "$0")
+SCRIPT_DIR=$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")
+
+usage() {
+	echo "Usage: $PRGNAME -w <webhook> [OPTIONS] <message>"
+    echo "<message> must be less than 2000 characters."
+	echo ""
+	echo "Options:"
+	echo "  -w          Webhook full URL or ID/TOKEN(?thread_id=ID). [required]"
+    echo "  -i          Message ID to update. [optional]"
+    echo "  -c          Code block language (bash, python, ansi, etc.). [optional]"
+    echo "              ANSI tags are supported:"
+    echo "                [t...]: Text color"
+    echo "                [tb...]: Bold text color"
+    echo "                [tu...]: Underlined text color"
+    echo "                [bg...]: Background color"
+    echo "                [r]: Reset"
+    echo "              Available colors: gray/grey, red, green, yellow, blue, pink, cyan, white, black"
+    echo ""
+    echo "  -e          Embed message (json structure necessary on <message>). [optional]"
+    echo ""
+    echo "  -h          Display this usage message."
+}
+
+parse_color_tags() {
+    # Parse color tags
+    # Format:
+    #   [t...]: Text color
+    #   [tb...]: Bold text color
+    #   [tu...]: Underlined text color
+    #   [bg...]: Background color
+    #   [r]: Reset
+    #
+    # Available colors:
+    #   gray/grey, red, green, yellow, blue, pink, cyan, white, black
+    #
+    # Examples:
+    #   [tred] - Red text
+    #   [tbgreen] - Bold green text
+    #   [tuyellow] - Underlined yellow text
+    #   [bgblue] - Blue background
+    #   [tred][bgblue] - Red text on blue background
+    #   [r] - Reset all formatting
+    
+    local output="$1"
+    
+    # Color mapping
+    declare -A colors=(
+        [gray]=30 [grey]=30 [red]=31 [green]=32 [yellow]=33 
+        [blue]=34 [pink]=35 [cyan]=36 [white]=37 [black]=30
+    )
+    
+    # Background color mapping
+    declare -A bg_colors=(
+        [gray]=44 [grey]=44 [red]=41 [green]=42 [yellow]=43
+        [blue]=40 [pink]=45 [cyan]=43 [white]=47 [black]=40
+        # Legacy names mapping
+        [firefly_dark_blue]=40 [orange]=41 [marble_blue]=42
+        [greyish_turquoise]=43 [indigo]=45 [light_gray]=46
+    )
+    
+    # Format codes
+    local normal=0
+    local bold=1
+    local underline=4
+    
+    # Reset
+    output=${output//\[r\]/\\u001b[0m}
+    
+    # Process text colors with formatting options
+    for color in "${!colors[@]}"; do
+        # Normal text color: [tcolor]
+        output=${output//\[t$color\]/\\u001b[$normal;${colors[$color]}m}
+        
+        # Bold text color: [tbcolor]
+        output=${output//\[tb$color\]/\\u001b[$bold;${colors[$color]}m}
+        
+        # Underlined text color: [tucolor]
+        output=${output//\[tu$color\]/\\u001b[$underline;${colors[$color]}m}
+
+        # Bold underline text color: [tbucolor]
+        output=${output//\[tbu$color\]/\\u001b[$bold;${colors[$color]}m}
+        
+        # Background colors: [bgcolor]
+        output=${output//\[bg$color\]/\\u001b[${bg_colors[$color]}m}
+    done
+    
+    echo "$output"
+}
+
+# Parse options
+while getopts "w:i:c:eh" OPT; do
+	case $OPT in
+		w)  # Webhook
+			WEBHOOK="${OPTARG}"
+			;;
+        i)  # Message ID
+            MESSAGE_ID="${OPTARG}"
+            ;;
+        c)  # Block code type (bash, python, etc.)
+            BLOCK_CODE="${OPTARG:-DEFAULT}"
+            ;;
+        e)  # Embed message
+            EMBED="true"
+            ;;
+		h)  # Display usage and current argument values
+			usage
+			exit 0
+			;;
+		\?)
+			echo "Invalid option: -$OPTARG" >&2
+			usage
+			exit 1
+			;;
+		:)
+			echo "Option -$OPTARG requires an argument." >&2
+			usage
+			exit 1
+			;;
+	esac
+done
+shift $((OPTIND-1))
+
+# Check if -e and -c are used together
+if [ -n "$EMBED" ] && [ -n "$BLOCK_CODE" ]; then
+    echo "Error: -e and -c options cannot be used together." >&2
+    usage
+    exit 1
+fi
+
+# Check if WEBHOOK is provided
+if [ -z "$WEBHOOK" ]; then
+    echo "Error: Webhook URL (-w) is required." >&2
+    usage
+    exit 1
+fi
+
+# Check if MESSAGE is provided
+if [ $# -lt 1 ]; then
+    echo "Please provide a message." >&2
+    usage
+    exit 1
+else
+    MESSAGE="$1"
+fi
+
+# Process webhook URL
+if [[ "$WEBHOOK" =~ ^https://discord\.com/api/webhooks/([0-9]+)/([a-zA-Z0-9_-]+)(\?thread_id=([0-9]+))?$ ]]; then
+    # Full webhook URL provided
+    WEBHOOK_ID="${BASH_REMATCH[1]}"
+    WEBHOOK_TOKEN="${BASH_REMATCH[2]}"
+    THREAD_ID="${BASH_REMATCH[4]}"
+elif [[ "$WEBHOOK" =~ ^([0-9]+)/([a-zA-Z0-9_-]+)(\?thread_id=([0-9]+))?$ ]]; then
+    # Short format provided (ID/TOKEN?thread_id=ID)
+    WEBHOOK_ID="${BASH_REMATCH[1]}"
+    WEBHOOK_TOKEN="${BASH_REMATCH[2]}"
+    THREAD_ID="${BASH_REMATCH[4]}"
+else
+    echo "Error: Invalid webhook format. Must be either a full Discord webhook URL or ID/TOKEN(?thread_id=ID) format." >&2
+    exit 1
+fi
+
+# Construct the URL
+WEBHOOK="https://discord.com/api/webhooks/${WEBHOOK_ID}/${WEBHOOK_TOKEN}"
+
+# Check if MESSAGE_ID is valid
+if [ -n "$MESSAGE_ID" ] && ! [[ "$MESSAGE_ID" =~ ^[0-9]+$ ]]; then
+    echo "Error: Invalid message ID format. Must be an ID message." >&2
+    exit 1
+elif [ -n "$MESSAGE_ID" ]; then
+    WEBHOOK="${WEBHOOK}/messages/${MESSAGE_ID}"
+fi
+
+# Add wait parameter to URL
+if [ -z "$THREAD_ID" ]; then
+    WEBHOOK="${WEBHOOK}?wait=1"
+else
+    WEBHOOK="${WEBHOOK}?thread_id=${THREAD_ID}&wait=1"
+fi
+
+# Format message with code block if needed
+if [ -n "$BLOCK_CODE" ]; then
+    if [ "$BLOCK_CODE" == "DEFAULT" ]; then
+        MESSAGE="\`\`\`\n$MESSAGE\n\`\`\`"
+    elif [ "$BLOCK_CODE" == "ansi" ]; then
+        # Apply color formatting to the message
+        MESSAGE=$(parse_color_tags "$MESSAGE")
+        MESSAGE="\`\`\`ansi\n$MESSAGE\n\`\`\`"
+    else
+        MESSAGE="\`\`\`$BLOCK_CODE\n$MESSAGE\n\`\`\`"
+    fi
+fi
+
+# Check message length and format
+if [ ${#1} -gt 2000 ] && [ -z "$EMBED" ]; then
+    echo "Error: Message is too long (max 2000 characters)." >&2
+    usage
+    exit 1
+elif [ -z "$EMBED" ]; then
+    MESSAGE="{\"content\": \"$MESSAGE\"}"
+fi
+
+# Send message
+if [ -z "$MESSAGE_ID" ]; then
+    sed -n 's/.*,"id":"\([0-9]\+\)".*/\1/p' <<< "$(curl -s -H "Content-Type: application/json" -d "$MESSAGE" "$WEBHOOK")"
+else
+    sed -n 's/.*,"id":"\([0-9]\+\)".*/\1/p' <<< "$(curl -s -H "Content-Type: application/json" -d "$MESSAGE" "$WEBHOOK" -X PATCH)"
+fi
