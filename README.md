@@ -4,6 +4,20 @@ Termhook is a command-line tool that allows you to send messages to Discord usin
 Send or Update message with raw texte, code blocks, and embeds.
 Include ANSI code block formatting support for text color, background color, bold, underline with easy syntax.
 
+## Installation
+#### Download "termhook"
+```bash
+wget https://raw.githubusercontent.com/IkiaeM/termhook/refs/heads/main/termhook
+```
+#### Make it executable
+```bash
+chmod +x termhook
+```
+#### Move it to /usr/local/bin (optional)
+```bash
+sudo mv termhook /usr/local/bin/
+```
+
 ## Usage
 ```bash
 termhook -w <webhook_url> [-i <message_id> -c <block_code> -e] <message/json embed>
